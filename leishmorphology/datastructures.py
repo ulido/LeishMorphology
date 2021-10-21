@@ -6,6 +6,7 @@ import dataclasses
 import base64
 import pandas as pd
 import itertools
+import numpy as np
 
 @dataclasses.dataclass
 class SegmentedCell:
@@ -13,10 +14,20 @@ class SegmentedCell:
     width: float
     area: float
     solidity: float
+    flagellum_straight_length: float
+    flagellum_path_length: float
     image: Image
 
     def _repr_html_(self):
         imgdata = base64.b64encode(self._repr_png_()).decode()
+        if not np.isnan(self.flagellum_straight_length):
+            flag_prop = f"""
+            <li>Flag. length: {self.flagellum_path_length:.1f}µm</li>
+            <li>Flag. straightness: {self.flagellum_straight_length/self.flagellum_path_length:.1f}</li>
+            """
+        else:
+            flag_prop = ""
+
         return f'''
         <div style="padding: 5px; position: relative;">
           <img src="data:image/png;base64,{imgdata}">
@@ -25,6 +36,7 @@ class SegmentedCell:
             <li>Width: {self.width:.1f}µm</li>
             <li>Area: {self.area:.1f}µm²</li>
             <li>Solidity: {self.solidity:.2f}</li>
+            {flag_prop}
           </ul>
         </div>'''
     
@@ -50,17 +62,19 @@ class SegmentedCellCollectionSet:
     sets: list[SegmentedCellCollection] = dataclasses.field(default_factory=list)
     
     def scatterplot(self):
-        markers = itertools.cycle(['o', 'x', '<', '>', '^', 'v'])
-        fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=150)
+        markers = itertools.cycle(['o', '<', '>', '^', 'v'])
+        fig, ax = plt.subplots(1, 1, figsize=(6, 4), dpi=150)
         scs = []
         for coll in self.sets:
             widths = [c.width for c in coll.cell_list]
             lengths = [c.length for c in coll.cell_list]
             areas = [c.area for c in coll.cell_list]
-            scs.append(ax.scatter(lengths, widths, c=areas, s=10, marker=next(markers), vmin=15, vmax=45,
-                                  label=coll.name))
-        plt.colorbar(scs[-1]).set_label("Area [µm²]")
-        ax.legend()
+            flag_lengths = [c.flagellum_path_length for c in coll.cell_list]
+            scs.append(ax.scatter(lengths, widths, c=flag_lengths, s=20, marker=next(markers), #vmin=15, vmax=45,
+                                  label=coll.name, edgecolors="black", plotnonfinite=True))
+        plt.colorbar(scs[-1]).set_label("Flagellum length [µm]")
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles, labels, fontsize="small", frameon=True)
         ax.set_xlabel("Length [µm]")
         ax.set_ylabel("Width [µm]")
         return fig
@@ -77,7 +91,7 @@ class SegmentedCellCollectionSet:
     
     def to_hdf(self, path):
         df = self.to_dataframe()
-        df.image = [image.asarray() for image in df.image]
+        df.image = [np.array(image) for image in df.image]
         df.to_hdf(path, "SegmentedCellCollectionSet")
     
     @staticmethod
