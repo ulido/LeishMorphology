@@ -12,6 +12,7 @@ class SegmentedCell:
     length: float
     width: float
     area: float
+    solidity: float
     image: Image
 
     def _repr_html_(self):
@@ -23,6 +24,7 @@ class SegmentedCell:
             <li>Length: {self.length:.1f}µm</li>
             <li>Width: {self.width:.1f}µm</li>
             <li>Area: {self.area:.1f}µm²</li>
+            <li>Solidity: {self.solidity:.2f}</li>
           </ul>
         </div>'''
     
@@ -75,12 +77,14 @@ class SegmentedCellCollectionSet:
     
     def to_hdf(self, path):
         df = self.to_dataframe()
+        df.image = [image.asarray() for image in df.image]
         df.to_hdf(path, "SegmentedCellCollectionSet")
     
     @staticmethod
     def load_hdf(path):
         df = pd.read_hdf(path, "SegmentedCellCollectionSet")
         colls = []
+        df.image = [Image.fromarray(image) for image in df.image]
         for (name, imgpath), g in df.groupby(["name", "image_path"]):
             cells = []
             for r in g.to_dict('records'):
