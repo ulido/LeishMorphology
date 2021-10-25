@@ -183,17 +183,29 @@ class ImageSet:
     
     @functools.cached_property
     def segmented_cell_bodies(self):
+        # Morphological grayscale opening with small disk (highlights out-of-focus shadows)
         open1 = opening(self.sharpened_phase_image, selem=disk(5))
+        # Morphological grayscale opening with larger disk (highlights mostly cell bodies)
         open2 = opening(self.sharpened_phase_image, selem=disk(15))
+        # Threshold both using Otsu. The small disk leads to a binary image with zeros at the shadows.
         thresh1 = open1 < threshold_otsu(open1)
         thresh2 = open2 < threshold_otsu(open2)
+        # Binary AND the two thresholded images - this gives better shadow rejection than the large disk alone.
+        # We also remove small objects here.
         thresh = remove_small_objects(thresh1 & thresh2, min_size=1000)
+        # Filter regions that are within 10 pixels of the image border.
         thresh = filter_touching_boundary(thresh, 10)
+        # Close holes and get rid of small thin structures (such as the flagella).
         thresh = binary_dilation(binary_dilation(binary_erosion(binary_erosion(thresh, selem=disk(2)), selem=disk(2)), selem=disk(2)), selem=disk(2))
+        # Remove small disconnected objects again
         thresh = remove_small_objects(thresh, min_size=1000)
         
+        # Filter by min intensity of the large disk opening. In focus cells are very dark in this image.
         mask = filter_min_intensity(thresh, open2)
+        # Finally, filter by solidity (that's the ratio between the object area (pixel count) and the
+        # object's convex hull area).
         mask = filter_solidity(mask, 0.7)
+        # Label and return.
         return label(mask)
     
     @functools.cached_property
@@ -215,7 +227,8 @@ class ImageSet:
         # This is ultimately so that we can subtract the cell bodies from the flagella binary image.
         # Note that this is purely to find the flagella, not to segment the cell bodies, this is done in
         # `segmented_cell_bodies`.
-        selem = disk(radius=3)
+        # THIS CAN LIKELY BE MORE STREAMLINED BUT WORKS FOR NOW.
+        selem = disk(radius=4)
         closed = dilation(
             dilation(
                 erosion(
@@ -231,12 +244,11 @@ class ImageSet:
         # very well. Abandoned this idea in favour of using a greedy distance based matching below.
         labelled = label(closed)
         for r in regionprops(labelled, intensity_image=self.labelled_cells_flagella):
-            lbl = np.unique(r.intensity_image)
+            lbl, counts = np.unique(r.intensity_image, return_counts=True)
+            counts = counts[lbl != 0]
             lbl = lbl[lbl != 0]
-            if (lbl.shape[0] == 1):
-                labelled[r.coords[:,0], r.coords[:,1]] = lbl[0]
-            else:
-                labelled[r.coords[:,0], r.coords[:,1]] = 0
+            lbl = lbl[counts.argmax()]
+            labelled[r.coords[:,0], r.coords[:,1]] = lbl
         return labelled
     
     @functools.cached_property
@@ -245,12 +257,13 @@ class ImageSet:
         thresh_both = self.labelled_cells_flagella > 0
         thresh_cells = self.labelled_cells > 0
         thresh_flag = remove_small_objects(thresh_both ^ (thresh_both & thresh_cells), min_size=500)
-        
+
         # Using medial axis skeletonization, filter out "flagella" that are wider than 8 pixels.
         # NOTE: THIS MIGHT BE TOO RESTRICTIVE! REVISIT!
         _, dist = medial_axis(thresh_flag, return_distance=True)
+        return dist
         for r in regionprops(label(thresh_flag), intensity_image=dist):
-            if r.intensity_image.max() > 8:
+            if r.intensity_image.max() > 12:
                 thresh_flag[r.coords[:,0], r.coords[:,1]] = False
         # Make sure the flagella are consistently labelled the same as the cell bodies.
         return thresh_flag * self.labelled_cells_flagella
@@ -263,7 +276,7 @@ class ImageSet:
         # Separate branches of the skeleton by finding and blanking points with a connectivity greater than 2
         # (i.e. three or more white pixels touching a given white pixel).
         connectivity_kernel = np.ones((3,3))
-        separated_branches = skel*(ndimage.convolve(1*skel, connectivity_kernel, mode="constant", cval=0) != 4)
+        separated_branches = skel*(ndimage.convolve(1*skel, connectivity_kernel, mode="constant", cval=0) < 4)
         # Again, filter by flagella width
         # THIS MIGHT NOT ACTUALLY BE NEEDED ANYMORE.
         for r in regionprops(label(separated_branches), intensity_image=dist):
@@ -282,11 +295,11 @@ class ImageSet:
         return skel*(ndimage.convolve(1*(skel>0), connectivity_kernel, mode="constant", cval=0) == 2)
     
     @functools.cached_property
-    def match_flagella(self, angle_cost=100.0):
+    def match_flagella(self, angle_cost=50.0):
         # This function matches the extrema points of flagella to the posterior of cells.
-        # This is done by identifying the kinetoplastid in the DAPI channel (always to the posterior side of the cell centre).
+        # This is done by identifying the kinetoplast in the DAPI channel (always to the posterior side of the cell centre).
         # We then project the fitted ellipse's major axis length from the cell centre outward in the direction of the
-        # kinetoplastid, this is the posterior point.
+        # kinetoplast, this is the posterior point.
         # Remember the posterior points together with the cell labels.
         cell_points = []
         cell_labels = []
@@ -297,9 +310,9 @@ class ImageSet:
 
             # THIS IS DUPLICATED FROM BELOW - NEED TO SPIN OUT INTO IT'S OWN PROPERTY
             bbox = np.array(r.bbox).reshape(2,2)
-            # Find the maximum of the DAPI intensity in the region. This will be the location of the kinetoplastid.
+            # Find the maximum of the DAPI intensity in the region. This will be the location of the kinetoplast.
             kinetoplast_pos = np.unravel_index((self.dapi_image[r.slice]*r.image).argmax(), r.image.shape) + bbox[0]
-            # The orientation of the kinetoplastid relative to the center tells us the right/left flip of the cell
+            # The orientation of the kinetoplast relative to the center tells us the right/left flip of the cell
             ϕ = np.arctan2(*(kinetoplast_pos - c)[::-1])
             # Adjust the orientation angle such that if we later rotate the image, the flagellum will point right.
             if np.cos(θ)*np.cos(ϕ)+np.sin(θ)*np.sin(ϕ) < 0:
@@ -308,7 +321,7 @@ class ImageSet:
             v = np.array([np.cos(θ), np.sin(θ)])
             x = c+a*v
             # We store the point and the direction of the cell.
-            cell_points.append((x[0], x[1], angle_cost*v[0], angle_cost*v[1]))
+            cell_points.append((x[0], x[1], v[0], v[1]))
             cell_labels.append(r.label)
         cell_points = np.array(cell_points)
 
@@ -323,10 +336,11 @@ class ImageSet:
         flag_labels = []
         for lbl, extrema in flag_lbl_extrema.items():
             if extrema.shape[0] != 2:
+                print(extrema)
                 raise ValueError
             a, b = extrema
             d = b-a
-            d = angle_cost*d/np.hypot(d[0], d[1])
+            d = d/np.hypot(d[0], d[1])
             flag_points.append((a[0], a[1], d[0], d[1]))
             flag_points.append((b[0], b[1], -d[0], -d[1]))
             flag_labels.extend([lbl, lbl])
@@ -335,16 +349,20 @@ class ImageSet:
         # Distance matrix between each cell posterior point and each flagellum extrema.
         # Note that this isn't just the planar distance, but includes the distance of the direction vectors too.
         # This is a poor man's cost function to penalise differences in cell and flaqellum orientation.
-        D = distance_matrix(cell_points[:,:], flag_points[:,:])
+        D = distance_matrix(cell_points[:,:2], flag_points[:,:2])
+        D /= 40.0
+        D[D > 1] = 1e5
+        A = 1-(cell_points[:,np.newaxis,2:] * flag_points[np.newaxis,:,2:]).sum(axis=-1)
+        C = D + A
         used_cell_indices = []
         used_flag_indices = []
         label_mapping = {}
-        for i, j in zip(*np.unravel_index(D.argsort(axis=None), D.shape)):
+        for i, j in zip(*np.unravel_index(C.argsort(axis=None), C.shape)):
             # We disallow distances beyond 50 (this includes the orientation mismatch cost).
-            if (D[i,j] < 50) & (i not in used_cell_indices) and (j not in used_flag_indices):
+            if (C[i,j] <= 2) & (i not in used_cell_indices) and (j not in used_flag_indices):
                 used_cell_indices.append(i)
                 used_flag_indices.append(j)
-                label_mapping[cell_labels[i]] = flag_labels[j]
+                label_mapping[cell_labels[i]] = (flag_labels[j], np.linalg.norm(np.array(cell_points[i][:2]) - flag_points[j][:2]))
         
         # Return the label mapping
         return label_mapping
@@ -363,7 +381,7 @@ class ImageSet:
             # Include flagellum properties if we could match one
             try:
                 # Lookup flagellum label
-                flagella_label = self.match_flagella[r.label]
+                flagella_label, flagella_distance = self.match_flagella[r.label]
                 # Flagellum mask and coordinates
                 flag_mask = flag_labels == flagella_label
                 if not flag_mask.any():
@@ -376,10 +394,10 @@ class ImageSet:
                 # SHOULD USE A SIMPLE CONTOUR ALGORITHM FOR THIS, BUT THIS WORKS FOR NOW EVEN IF IT IS SLOW.
                 mmask = binary_dilation(np.pad(flag_mask, 1), selem=np.ones((2,2)))
                 mn = moore_neighborhood(mmask)
-                flag_path_length = np.linalg.norm(np.diff(mn, axis=0), axis=1).sum()*pixelsize/2
+                flag_path_length = (flagella_distance+np.linalg.norm(np.diff(mn, axis=0), axis=1).sum())*pixelsize/2
                 # Straight length is simply the distance between the flagellum's extrema
-                flag_straight_length = np.linalg.norm(
-                    np.diff(np.array(np.where(flag_extrema == flagella_label)).T, axis=0))*pixelsize
+                flag_straight_length = (flagella_distance+np.linalg.norm(
+                    np.diff(np.array(np.where(flag_extrema == flagella_label)).T, axis=0)))*pixelsize
             except (KeyError, IndexError):
                 # Found no flagella, give NaNs
                 fcoords = np.empty((0, 2), dtype=int)
@@ -391,9 +409,9 @@ class ImageSet:
             c = bbox[0] + np.diff(bbox, axis=0)//2
             # Regionprops does fit an ellipse for us and gives us the major and minor axes, as well as the orientation angle.
             θ = r.orientation
-            # Find the maximum of the DAPI intensity in the region. This will be the location of the kinetoplastid.
+            # Find the maximum of the DAPI intensity in the region. This will be the location of the kinetoplast.
             kinetoplast_pos = np.unravel_index((self.dapi_image[r.slice]*r.image).argmax(), r.image.shape) + bbox[0]
-            # The orientation of the kinetoplastid relative to the center tells us the right/left flip of the cell
+            # The orientation of the kinetoplast relative to the center tells us the right/left flip of the cell
             ϕ = np.arctan2(*(kinetoplast_pos - c)[0][::-1])
             # Adjust the orientation angle such that if we later rotate the image, the flagellum will point right.
             if np.cos(θ)*np.cos(ϕ)+np.sin(θ)*np.sin(ϕ) < 0:
@@ -409,6 +427,10 @@ class ImageSet:
                 solidity=r.solidity,
                 flagellum_path_length=flag_path_length,
                 flagellum_straight_length=flag_straight_length,
-                image=Image.fromarray(thumb)))
+                image=Image.fromarray(thumb),
+                cell_body_coords=r.coords,
+                flagellum_coords=fcoords,
+                coordinates=(c[0,0],c[0,1]),
+            ))
 
         return cells

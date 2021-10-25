@@ -17,6 +17,9 @@ class SegmentedCell:
     flagellum_straight_length: float
     flagellum_path_length: float
     image: Image
+    cell_body_coords: np.ndarray
+    flagellum_coords: np.ndarray
+    coordinates: tuple
 
     def _repr_html_(self):
         imgdata = base64.b64encode(self._repr_png_()).decode()
