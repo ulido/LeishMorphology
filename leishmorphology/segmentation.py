@@ -4,7 +4,7 @@ import tifffile
 import json
 import numpy as np
 import functools
-from tqdm.auto import tqdm
+from warnings import warn
 
 from skimage.filters import unsharp_mask, meijering, threshold_otsu, threshold_li
 from skimage.morphology import closing, erosion, dilation, binary_closing, binary_erosion, binary_dilation, diameter_closing, medial_axis, remove_small_objects, skeletonize, medial_axis, disk, opening
@@ -17,7 +17,7 @@ from scipy import ndimage
 from scipy.spatial import distance_matrix
 
 from .datastructures import SegmentedCell, SegmentedCellCollection
-from .moore_neighborhood import moore_neighborhood
+from .moore_neighborhood import moore_neighborhood, MaxIterReachedError
 
 def unsharp_mask_multi(img, radius, amount):
     """Apply an unsharp mask `N` times where `N` is the number of radii in the list `radius` and the number of amounts in the list `amount`. If `amount` is a scalar it will be promoted to a list of length `N`. Returns the resulting sharpened image.
@@ -135,7 +135,7 @@ class ImageSet:
                  unsharp_mask_settings={"radius": 20, "amount": 0.9},
                  phase_threshold_settings={"n_standard_deviations": 1},
                  threshold_closing_settings={"selem": disk(radius=3)}, #np.ones((5, 5))},
-                 segmentation_filter_settings={"n_standard_deviations": 2, "area_bounds": (2000, 7000)},
+                 segmentation_filter_settings={"n_standard_deviations": 2, "area_bounds": (1000, 7000)},
                  rolling_ball_settings={"radius": 10, "n_standard_deviations": 1.5, "min_size": 2000},
                 ):
         self.path = Path(path)
@@ -143,7 +143,13 @@ class ImageSet:
             self.name = str(self.path)
         else:
             self.name = name
-        self._phase_path, self._gene_path, self._dapi_path = sorted([x for x in (self.path / "Default").glob('img_channel???_position000_time000000000_z000.tif')])
+        
+        self._OME_TIFF = False
+        try:
+            self._phase_path, self._gene_path, self._dapi_path = sorted([x for x in (self.path / "Default").glob('img_channel???_position000_time000000000_z000.tif')])
+        except ValueError:
+            self._phase_path = self._gene_path = self._dapi_path = next(iter(self.path.glob('*.tif')))
+            self._OME_TIFF = True
         
         self._settings = {
             "unsharp_mask": unsharp_mask_settings,
@@ -154,28 +160,47 @@ class ImageSet:
         }
         
     @functools.cached_property
-    def metadata(self):
-        with tifffile.TiffFile(self._phase_path, 'rb') as tif:
-            return json.loads(tif.imagej_metadata["Info"])
-    
-    @property
     def pixelsize(self):
-        return self.metadata["PixelSizeUm"]
+        if self._OME_TIFF:
+            import xml.etree.ElementTree as ET
+            ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
+                root = ET.fromstring(tif.ome_metadata.encode("utf-8"))
+            pixelsize = float(root.find('ome:Image', ns).find('ome:Pixels', ns).attrib['PhysicalSizeX'])
+        else:
+            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
+                pixelsize = json.loads(tif.imagej_metadata)["PixelSizeUm"]
+        if pixelsize > 1:
+            warn("Pixel size is larger than 1µm. This is likely a metadata problem, proceeding with setting pixelsize=0.1031746031746µm.")
+            pixelsize = 0.1031746031746
+        return pixelsize
     
     @functools.cached_property
     def phase_image(self):
-        with tifffile.TiffFile(self._phase_path, 'rb') as tif:
-            return tif.asarray()
+        if self._OME_TIFF:
+            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
+                return tif.series[0][0].asarray()
+        else:
+            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
+                return tif.asarray()
     
     @functools.cached_property
     def gene_image(self):
-        with tifffile.TiffFile(self._gene_path, 'rb') as tif:
-            return tif.asarray()
+        if self._OME_TIFF:
+            with tifffile.TiffFile(self._gene_path, 'rb') as tif:
+                return tif.series[0][1].asarray()
+        else:
+            with tifffile.TiffFile(self._gene_path, 'rb') as tif:
+                return tif.asarray()
     
     @functools.cached_property
     def dapi_image(self):
-        with tifffile.TiffFile(self._dapi_path, 'rb') as tif:
-            return tif.asarray()
+        if self._OME_TIFF:
+            with tifffile.TiffFile(self._dapi_path, 'rb') as tif:
+                return tif.series[0][2].asarray()
+        else:
+            with tifffile.TiffFile(self._dapi_path, 'rb') as tif:
+                return tif.asarray()
 
     @functools.cached_property
     def sharpened_phase_image(self):
@@ -377,7 +402,7 @@ class ImageSet:
         # create a nicely rotated thumbnail and store in the collection.
         flag_labels = self.labelled_skeletonized_flagella
         flag_extrema = self.labelled_flagella_extrema
-        for r in tqdm(regionprops(self.segmented_cell_bodies)):
+        for r in regionprops(self.segmented_cell_bodies):
             # Include flagellum properties if we could match one
             try:
                 # Lookup flagellum label
@@ -394,11 +419,12 @@ class ImageSet:
                 # SHOULD USE A SIMPLE CONTOUR ALGORITHM FOR THIS, BUT THIS WORKS FOR NOW EVEN IF IT IS SLOW.
                 mmask = binary_dilation(np.pad(flag_mask, 1), selem=np.ones((2,2)))
                 mn = moore_neighborhood(mmask)
+                    
                 flag_path_length = (flagella_distance+np.linalg.norm(np.diff(mn, axis=0), axis=1).sum())*pixelsize/2
                 # Straight length is simply the distance between the flagellum's extrema
                 flag_straight_length = (flagella_distance+np.linalg.norm(
                     np.diff(np.array(np.where(flag_extrema == flagella_label)).T, axis=0)))*pixelsize
-            except (KeyError, IndexError):
+            except (KeyError, IndexError, MaxIterReachedError):
                 # Found no flagella, give NaNs
                 fcoords = np.empty((0, 2), dtype=int)
                 flag_straight_length = np.nan
