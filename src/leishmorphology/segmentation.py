@@ -146,14 +146,6 @@ class ImageSet:
         else:
             self.name = name
         
-        self._OME_TIFF = False
-        try:
-            self._phase_path, self._gene_path, self._dapi_path = sorted([x for x in (self.path / "Default").glob('img_channel???_position000_time000000000_z000.tif')])
-        except ValueError:
-            self._phase_path = self._gene_path = self._dapi_path = next(iter(self.path.glob('*.tif')))
-            self.path = self._phase_path
-            self._OME_TIFF = True
-        
         self._settings = {
             "unsharp_mask": unsharp_mask_settings,
             "phase_threshold": phase_threshold_settings,
@@ -164,15 +156,12 @@ class ImageSet:
         
     @functools.cached_property
     def pixelsize(self):
-        if self._OME_TIFF:
-            import xml.etree.ElementTree as ET
-            ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
-                root = ET.fromstring(tif.ome_metadata.encode("utf-8"))
-            pixelsize = float(root.find('ome:Image', ns).find('ome:Pixels', ns).attrib['PhysicalSizeX'])
-        else:
-            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
-                pixelsize = json.loads(tif.imagej_metadata)["PixelSizeUm"]
+        import xml.etree.ElementTree as ET
+        ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+        with tifffile.TiffFile(self.path, 'rb') as tif:
+            root = ET.fromstring(tif.ome_metadata.encode("utf-8"))
+        pixelsize = float(root.find('ome:Image', ns).find('ome:Pixels', ns).attrib['PhysicalSizeX'])
+
         if pixelsize > 1:
             warn("Pixel size is larger than 1µm. This is likely a metadata problem, proceeding with setting pixelsize=0.1031746031746µm.")
             pixelsize = 0.1031746031746
@@ -180,30 +169,18 @@ class ImageSet:
     
     @functools.cached_property
     def phase_image(self):
-        if self._OME_TIFF:
-            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
-                return tif.series[0][0].asarray()
-        else:
-            with tifffile.TiffFile(self._phase_path, 'rb') as tif:
-                return tif.asarray()
+        with tifffile.TiffFile(self.path, 'rb') as tif:
+            return tif.series[0][0].asarray()
     
     @functools.cached_property
     def gene_image(self):
-        if self._OME_TIFF:
-            with tifffile.TiffFile(self._gene_path, 'rb') as tif:
-                return tif.series[0][1].asarray()
-        else:
-            with tifffile.TiffFile(self._gene_path, 'rb') as tif:
-                return tif.asarray()
+        with tifffile.TiffFile(self.path, 'rb') as tif:
+            return tif.series[0][1].asarray()
     
     @functools.cached_property
     def dapi_image(self):
-        if self._OME_TIFF:
-            with tifffile.TiffFile(self._dapi_path, 'rb') as tif:
-                return tif.series[0][2].asarray()
-        else:
-            with tifffile.TiffFile(self._dapi_path, 'rb') as tif:
-                return tif.asarray()
+        with tifffile.TiffFile(self.path, 'rb') as tif:
+            return tif.series[0][2].asarray()
 
     @functools.cached_property
     def tophat_phase_image(self):
