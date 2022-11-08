@@ -31,7 +31,7 @@ def unsharp_mask_multi(img, radius, amount):
         amount = len(radius)*[amount]
 
     if len(radius) != len(amount):
-        raise ArgumentError("The number of radiusses have to be the same as the number of amounts.")
+        raise ValueError("The number of radiusses have to be the same as the number of amounts.")
     
     # Iterate over radii and amounts, repeatedly applied skimage's unsharp_mask.
     uns = img
