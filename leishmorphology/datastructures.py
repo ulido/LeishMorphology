@@ -7,6 +7,7 @@ import base64
 import pandas as pd
 import itertools
 import numpy as np
+from typing import List
 
 @dataclasses.dataclass
 class SegmentedCell:
@@ -50,7 +51,7 @@ class SegmentedCell:
 class SegmentedCellCollection:
     name: str
     image_path: Path
-    cell_list: list[SegmentedCell] = dataclasses.field(default_factory=list)
+    cell_list: List[SegmentedCell] = dataclasses.field(default_factory=list)
     
     def _repr_html_(self):
         return ('<div style="border: 1px solid black; display: flex; flex-wrap: wrap; justify-content: space-evenly;">' + 
@@ -62,7 +63,7 @@ class SegmentedCellCollection:
         
 @dataclasses.dataclass
 class SegmentedCellCollectionSet:
-    sets: list[SegmentedCellCollection] = dataclasses.field(default_factory=list)
+    sets: List[SegmentedCellCollection] = dataclasses.field(default_factory=list)
     
     def scatterplot(self):
         markers = itertools.cycle(['o', '<', '>', '^', 'v'])
