@@ -46,6 +46,22 @@ class SegmentedCell:
     
     def _repr_png_(self):
         return self.image._repr_png_()
+    
+    @property
+    def bbox(self):
+        cell_min = self.cell_body_coords.min(axis=0)
+        cell_max = self.cell_body_coords.max(axis=0)
+#        if self.flagellum_coords.shape[0] > 0:
+#            flag_min = self.flagellum_coords.min(axis=0)
+#            flag_max = self.flagellum_coords.max(axis=0)
+
+#            minc = np.min([cell_min, flag_min], axis=0)
+#            maxc = np.max([cell_max, flag_max], axis=0)
+#        else:
+        minc = cell_min
+        maxc = cell_max
+        
+        return [minc[0], maxc[0], minc[1], maxc[1]]
 
 @dataclasses.dataclass
 class SegmentedCellCollection:
