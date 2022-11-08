@@ -151,6 +151,7 @@ class ImageSet:
             self._phase_path, self._gene_path, self._dapi_path = sorted([x for x in (self.path / "Default").glob('img_channel???_position000_time000000000_z000.tif')])
         except ValueError:
             self._phase_path = self._gene_path = self._dapi_path = next(iter(self.path.glob('*.tif')))
+            self.path = self._phase_path
             self._OME_TIFF = True
         
         self._settings = {
