@@ -93,8 +93,8 @@ class SegmentedCellCollectionSet:
             scs.append(ax.scatter(lengths, widths, c=flag_lengths, s=20, marker=next(markers), #vmin=15, vmax=45,
                                   label=coll.name, edgecolors="black", plotnonfinite=True))
         plt.colorbar(scs[-1]).set_label("Flagellum length [µm]")
-        handles, labels = ax.get_legend_handles_labels()
-        ax.legend(handles, labels, fontsize="small", frameon=True)
+        #handles, labels = ax.get_legend_handles_labels()
+        #ax.legend(handles, labels, fontsize="small", frameon=True)
         ax.set_xlabel("Length [µm]")
         ax.set_ylabel("Width [µm]")
         return fig
