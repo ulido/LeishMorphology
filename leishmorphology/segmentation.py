@@ -238,7 +238,7 @@ class ImageSet:
         # Threshold the meijering filter image
         meij = self.meijering_neuriteness
         # Use the Li thresholding method (minimum entropy method)
-        thresh = meij > threshold_li(meij)
+        thresh = meij > threshold_otsu(meij)
         return label(thresh)
         
     @functools.cached_property
