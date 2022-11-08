@@ -6,8 +6,10 @@ import numpy as np
 import functools
 from warnings import warn
 
+from tqdm.auto import tqdm
+
 from skimage.filters import unsharp_mask, meijering, threshold_otsu, threshold_li
-from skimage.morphology import closing, erosion, dilation, binary_closing, binary_erosion, binary_dilation, diameter_closing, medial_axis, remove_small_objects, skeletonize, medial_axis, disk, opening
+from skimage.morphology import closing, erosion, dilation, binary_opening, binary_closing, binary_erosion, binary_dilation, diameter_closing, medial_axis, remove_small_objects, skeletonize, medial_axis, disk, opening, black_tophat, square
 from skimage.measure import label, regionprops
 from skimage.color import label2rgb
 from skimage.transform import rotate
@@ -203,35 +205,27 @@ class ImageSet:
                 return tif.asarray()
 
     @functools.cached_property
-    def sharpened_phase_image(self):
-        return unsharp_mask(self.phase_image, **self._settings["unsharp_mask"])
-    
+    def tophat_phase_image(self):
+        # Morphological top hat operation (removes haloes from phase image,
+        # highlights cell bodies)
+        tophat = black_tophat(self.phase_image, square(25))
+        tophat = (tophat - tophat.min())/(tophat.max() - tophat.min())
+        return tophat
+        
     @functools.cached_property
     def segmented_cell_bodies(self):
-        # Morphological grayscale opening with small disk (highlights out-of-focus shadows)
-        open1 = opening(self.sharpened_phase_image, selem=disk(5))
-        # Morphological grayscale opening with larger disk (highlights mostly cell bodies)
-        open2 = opening(self.sharpened_phase_image, selem=disk(15))
-        # Threshold both using Otsu. The small disk leads to a binary image with zeros at the shadows.
-        thresh1 = open1 < threshold_otsu(open1)
-        thresh2 = open2 < threshold_otsu(open2)
-        # Binary AND the two thresholded images - this gives better shadow rejection than the large disk alone.
-        # We also remove small objects here.
-        thresh = remove_small_objects(thresh1 & thresh2, min_size=1000)
-        # Filter regions that are within 10 pixels of the image border.
-        thresh = filter_touching_boundary(thresh, 10)
-        # Close holes and get rid of small thin structures (such as the flagella).
-        thresh = binary_dilation(binary_dilation(binary_erosion(binary_erosion(thresh, selem=disk(2)), selem=disk(2)), selem=disk(2)), selem=disk(2))
-        # Remove small disconnected objects again
-        thresh = remove_small_objects(thresh, min_size=1000)
+        tophat_mask = self.tophat_phase_image > threshold_otsu(self.tophat_phase_image)
+        cell_bodies = remove_small_objects(binary_opening(tophat_mask, disk(5)), min_size=500)
         
+        # Filter regions that are within 10 pixels of the image border.
+        cell_bodies = filter_touching_boundary(cell_bodies, 10)        
         # Filter by min intensity of the large disk opening. In focus cells are very dark in this image.
-        mask = filter_min_intensity(thresh, open2)
+        cell_bodies = filter_min_intensity(cell_bodies, self.phase_image)
         # Finally, filter by solidity (that's the ratio between the object area (pixel count) and the
         # object's convex hull area).
-        mask = filter_solidity(mask, 0.7)
+        cell_bodies = filter_solidity(cell_bodies, 0.7)
         # Label and return.
-        return label(mask)
+        return label(cell_bodies)
     
     @functools.cached_property
     def meijering_neuriteness(self):
