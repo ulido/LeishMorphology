@@ -231,7 +231,7 @@ class ImageSet:
     @functools.cached_property
     def meijering_neuriteness(self):
         # Meijering neuriteness is a Hessian based filter for long thin structures.
-        return meijering(self.sharpened_phase_image, sigmas=range(1, 6, 1), black_ridges=True)
+        return meijering(self.tophat_phase_image, sigmas=range(1, 6, 1), black_ridges=False)
 
     @functools.cached_property
     def labelled_cells_flagella(self):
@@ -275,9 +275,9 @@ class ImageSet:
     def labelled_flagella(self):
         # Subtract the cell bodies from the flagella threshold
         thresh_both = self.labelled_cells_flagella > 0
-        thresh_cells = self.labelled_cells > 0
+        thresh_cells = self.segmented_cell_bodies > 0
         thresh_flag = remove_small_objects(thresh_both ^ (thresh_both & thresh_cells), min_size=500)
-
+        
         # Using medial axis skeletonization, filter out "flagella" that are wider than 8 pixels.
         # NOTE: THIS MIGHT BE TOO RESTRICTIVE! REVISIT!
         _, dist = medial_axis(thresh_flag, return_distance=True)
