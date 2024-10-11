@@ -80,7 +80,7 @@ def image_thumbnail(θ, intensity_img, cell_coords, flagella_coords, width=400, 
     # Dilate the flagella mask a bit, it's only a skeleton and would not be visible otherwise.
     flag_mask = np.zeros_like(img, dtype=bool)
     flag_mask[flagella_coords[:,0], flagella_coords[:,1]] = True
-    flag_mask = binary_dilation(flag_mask, selem=disk(radius=3))
+    flag_mask = binary_dilation(flag_mask, footprint=disk(radius=3))
     overlay_labels = np.zeros(img.shape, dtype=int)
     overlay_labels[cell_coords[:,0],cell_coords[:,1]] = 1
     overlay_labels[flag_mask] = 2
@@ -133,14 +133,25 @@ def filter_min_intensity(mask, intensity_image):
     return mask
 
 class ImageSet:
-    def __init__(self, path, name=None,
+    def __init__(self, path, name=None, pixelsize=0.1031746031746,
                  unsharp_mask_settings={"radius": 20, "amount": 0.9},
                  phase_threshold_settings={"n_standard_deviations": 1},
                  threshold_closing_settings={"selem": disk(radius=3)}, #np.ones((5, 5))},
                  segmentation_filter_settings={"n_standard_deviations": 2, "area_bounds": (1000, 7000)},
                  rolling_ball_settings={"radius": 10, "n_standard_deviations": 1.5, "min_size": 2000},
                 ):
-        self.path = Path(path)
+        if isinstance(path, list):
+            self._phase_image = path[0]
+            self._gene_image = path[1]
+            self._dapi_image = path[2]
+            if pixelsize is not None:
+                self._pixelsize = pixelsize
+            else:
+                raise ValueError('Need to specify pixelsize if images are given as arguments.')
+            import uuid
+            self.path = uuid.uuid4()
+        else:
+            self.path = Path(path)
         if name is None:
             self.name = str(self.path)
         else:
@@ -156,37 +167,49 @@ class ImageSet:
         
     @functools.cached_property
     def pixelsize(self):
-        import xml.etree.ElementTree as ET
-        ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-        with tifffile.TiffFile(self.path, 'rb') as tif:
-            root = ET.fromstring(tif.ome_metadata.encode("utf-8"))
-        pixelsize = float(root.find('ome:Image', ns).find('ome:Pixels', ns).attrib['PhysicalSizeX'])
+        if not hasattr(self, '_pixelsize'):
+            import xml.etree.ElementTree as ET
+            ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+            with tifffile.TiffFile(self.path, 'rb') as tif:
+                root = ET.fromstring(tif.ome_metadata.encode("utf-8"))
+            self._pixelsize = float(root.find('ome:Image', ns).find('ome:Pixels', ns).attrib['PhysicalSizeX'])
 
-        if pixelsize > 1:
-            warn("Pixel size is larger than 1µm. This is likely a metadata problem, proceeding with setting pixelsize=0.1031746031746µm.")
-            pixelsize = 0.1031746031746
-        return pixelsize
+            if self._pixelsize > 1:
+                warn("Pixel size is larger than 1µm. This is likely a metadata problem, proceeding with setting pixelsize=0.1031746031746µm.")
+                self._pixelsize = 0.1031746031746
+        return self._pixelsize
     
-    @functools.cached_property
+    @property
     def phase_image(self):
-        with tifffile.TiffFile(self.path, 'rb') as tif:
-            return tif.series[0][0].asarray()
+        if not hasattr(self, '_phase_image'):
+            with tifffile.TiffFile(self.path, 'rb') as tif:
+                self._phase_image = tif.series[0][0].asarray()
+        return self._phase_image
     
-    @functools.cached_property
+    @property
     def gene_image(self):
-        with tifffile.TiffFile(self.path, 'rb') as tif:
-            return tif.series[0][1].asarray()
-    
-    @functools.cached_property
+        if not hasattr(self, '_gene_image'):
+            with tifffile.TiffFile(self.path, 'rb') as tif:
+                self._gene_image = tif.series[0][1].asarray()
+        return self._gene_image
+ 
+    @property
     def dapi_image(self):
-        with tifffile.TiffFile(self.path, 'rb') as tif:
-            return tif.series[0][2].asarray()
+        if not hasattr(self, '_dapi_image'):
+            with tifffile.TiffFile(self.path, 'rb') as tif:
+                self._dapi_image = tif.series[0][2].asarray()
+        return self._dapi_image
+
 
     @functools.cached_property
     def tophat_phase_image(self):
         # Morphological top hat operation (removes haloes from phase image,
         # highlights cell bodies)
-        tophat = black_tophat(self.phase_image, square(25))
+        try:
+            tophat = black_tophat(self.phase_image, square(25))
+        except:
+            print(self.phase_image.shape)
+            raise
         tophat = (tophat - tophat.min())/(tophat.max() - tophat.min())
         return tophat
         
@@ -230,11 +253,11 @@ class ImageSet:
             dilation(
                 erosion(
                     erosion(
-                        closing(255*(self.labelled_cells_flagella > 0), selem=selem),
-                        selem=selem),
-                    selem=selem),
-                selem=selem),
-            selem=selem) > 0
+                        closing(255*(self.labelled_cells_flagella > 0), footprint=selem),
+                        footprint=selem),
+                    footprint=selem),
+                footprint=selem),
+            footprint=selem) > 0
         
         # Make sure the cell bodies have the same labels as in `labelled_cells_flagella`.
         # This was originally to be able to associate flagella with cell bodies, but didn't work
@@ -389,7 +412,7 @@ class ImageSet:
                 # This is a contour, so it traces the path twice, need to divide by two.
                 # We also need to dilate the flagellum mask, otherwise the contour algorithm gets stuck.
                 # SHOULD USE A SIMPLE CONTOUR ALGORITHM FOR THIS, BUT THIS WORKS FOR NOW EVEN IF IT IS SLOW.
-                mmask = binary_dilation(np.pad(flag_mask, 1), selem=np.ones((2,2)))
+                mmask = binary_dilation(np.pad(flag_mask, 1), footprint=np.ones((2,2)))
                 mn = moore_neighborhood(mmask)
                     
                 flag_path_length = (flagella_distance+np.linalg.norm(np.diff(mn, axis=0), axis=1).sum())*pixelsize/2
